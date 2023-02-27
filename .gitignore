@@ -6,3 +6,7 @@ c_matrix 3x3.csv
 3x3 with annotations.png
 c_matrix 4x4.csv
 haldane couplings.png
+edgemode location.svg
+.gitignore
+intensity bar plot.svg
+Flat intensity spectra from osa.svg

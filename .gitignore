@@ -10,3 +10,5 @@ edgemode location.svg
 .gitignore
 intensity bar plot.svg
 Flat intensity spectra from osa.svg
+barchart for single shot fig 1.svg
+*.svg

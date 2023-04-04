@@ -199,8 +199,8 @@ class StackGeometry:
         self.stackId = stack_id
         self.stackOd = stack_od 
 
-        # Calculate the required capillary diameter based on the number of rings
-        self.capillaryDiameter = float(self.stackId)*0.99/(2*self.nRings)
+        # Calculate the required capillary diameter based on the largest stack diameter once corners have been dropped
+        self.capillaryDiameter = float(self.stackId)/np.sqrt((2*self.nRings)**2 + 3)
         print('Capillary Diameter Required: {}'.format(self.capillaryDiameter))
 
     def scale_lattice_to_stack_size(self):
@@ -269,3 +269,146 @@ class StackGeometry:
 
     def export_stack_design(self, filename):
         self.stackDesign.savefig('{}.svg'.format(filename), dpi=300)
+
+class GlassChecker:
+    """
+    A class for calculating and displaying the required parameters for making optical fibers.
+
+    Attributes:
+        dOverLambda (float): The value of the ratio of the fiber diameter to the wavelength of the light.
+        desiredPitch (float): The desired pitch of the fiber cores in micrometers.
+        goalDiameter (float): The ideal diameter of the optical fiber in micrometers.
+        nRings (int): The number of rings in the fiber cladding.
+        nCores (int): The number of cores in the fiber.
+        nCapsNotCores (int): The number of capillaries required for the fiber cladding (excluding those used for the cores).
+
+    Methods:
+        read_latest_tube_list(filepath): Reads an Excel file and sets the list of available tubes.
+        show_closest_capillary_tubes(): Displays a table of the capillary tubes that are closest to the required diameter.
+        show_available_stack_tubes(): Displays a table of the available stack tubes.
+        set_capillary_sizes(capillary_tube_od, capillary_tube_id, core_cap_od, core_cap_id): Sets the sizes of the capillary tubes and core caps.
+        set_stack_size(stack_od, stack_id): Sets the sizes of the stack tubes.
+        calc_capillary_diameter(): Calculates the required diameter of the capillary tubes and displays the necessary lengths of capillary and core tubes.
+        show_jacket_options(): Displays a table of the available jacket tubes and their relevant parameters.
+    """
+    def __init__(self, d_over_lambda, desired_pitch, ideal_fibre_diameter, number_of_rings, number_of_cores):
+        """
+        Initializes the GlassChecker class.
+
+        Args:
+            d_over_lambda (float): The value of the ratio of the fiber diameter to the wavelength of the light.
+            desired_pitch (float): The desired pitch of the fiber cores in micrometers.
+            ideal_fibre_diameter (float): The ideal diameter of the optical fiber in micrometers.
+            number_of_rings (int): The number of rings in the fiber cladding.
+            number_of_cores (int): The number of cores in the fiber.
+        """
+        self.dOverLambda = d_over_lambda
+        self.desiredPitch = desired_pitch
+        self.goalDiameter =  ideal_fibre_diameter
+        self.nRings = number_of_rings
+        self.nCores = number_of_cores
+        self.nCapsNotCores = 6*sum([i for i in range(self.nRings+1)]) - self.nCores
+
+    def read_latest_tube_list(self, filepath):
+        """
+        Reads the tube list Excel file and sets the list of available tubes.
+        Splits tubes into stack and jacket for easier separation later
+
+        Args:
+            filepath (str): The file path of the Excel file.
+        """
+        latest_excel_sheet = pd.read_excel(filepath, sheet_name=1)
+        is_available = latest_excel_sheet['Available'] == 'Y'
+        self.availableTubeList = latest_excel_sheet[is_available]
+        self.stackTubes = self.availableTubeList[self.availableTubeList['NomOD'].astype('float64') > 20]
+        self.jacketTubes = self.availableTubeList[self.availableTubeList['NomOD'].astype('float64') < 12]
+    
+    def show_closest_capillary_tubes(self):
+        """
+        Displays a table of the capillary tubes that are closest to the required diameter.
+        """
+        closest_caps = self.availableTubeList.iloc[(self.availableTubeList['ID/OD']-self.dOverLambda).abs().argsort()[:20]]
+        closest_caps = closest_caps[['Tube No','NomOD', 'NomID', 'ID/OD', 'Od Avg', 'Id Avg','id/od']]
+        display(closest_caps.head(10))
+    
+    def show_available_stack_tubes(self):
+        """
+        Displays a table of the available stack tubes.
+        """
+        stack_tubes_to_show = self.stackTubes[['Tube No','NomOD', 'NomID', 'ID/OD', 'Od Avg', 'Id Avg','id/od']]
+        display(stack_tubes_to_show.head(10))
+
+    def set_capillary_sizes(self, capillary_tube_od, capillary_tube_id, core_cap_od, core_cap_id):
+        """
+        Set the sizes of the capillary tubes and core tubes.
+
+        Parameters:
+        capillary_tube_od (float): outer diameter of the capillary tubes.
+        capillary_tube_id (float): inner diameter of the capillary tubes.
+        core_cap_od (float): outer diameter of the core tubes.
+        core_cap_id (float): inner diameter of the core tubes.
+        """
+        self.capillaryOdTube = capillary_tube_od
+        self.capillaryIdTube = capillary_tube_id
+        self.coreCapOd = core_cap_od
+        self.coreCapId = core_cap_id
+
+
+    def set_stack_size(self, stack_od, stack_id):
+        """
+        Set the sizes of the stack.
+
+        Parameters:
+        stack_od (float): outer diameter of the stack.
+        stack_id (float): inner diameter of the stack.
+        """
+        self.stackOd = stack_od
+        self.stackId = stack_id
+
+
+    def calc_capillary_diameter(self):
+        """
+        Calculate the diameter of the capillary tubes needed for the given stack and number of layers.
+
+        Prints the required capillary diameter, the length of capillary tube needed for caps, and the length of
+        capillary tube needed for cores.
+        """
+        self.final_capillary_diameter = self.stackId/np.sqrt(3+(2*self.nRings)**2)
+        length_of_cap_tube_needed_caps = (self.final_capillary_diameter/self.capillaryOdTube)**2 * self.nCapsNotCores
+        length_of_cap_tube_needed_cores = (self.final_capillary_diameter/self.coreCapOd)**2 * self.nCores
+        print('Required Capillary Diameter: {}'.format(self.final_capillary_diameter))
+        print('Length of Core tube needed: {}'.format(length_of_cap_tube_needed_cores))
+        print('Length of Capillary tube needed: {}'.format(length_of_cap_tube_needed_caps))
+
+
+    def show_jacket_options(self):
+        """
+        Show the different jacket options available and the corresponding fibre parameters.
+
+        Prints a table with the fibre pitch at 150um, the fibre diameter for ideal pitch, the number of jacket tubes,
+        the jacket OD, and the jacket ID for each jacket ratio.
+        """
+        jacket_ratio_list = np.unique(self.jacketTubes['ID/OD'])
+        jacket_dict = {b: len(self.jacketTubes[self.jacketTubes['ID/OD'] == b]) for b in jacket_ratio_list}
+
+        fibre_param_options = pd.DataFrame(columns=['Fibre Pitch at 150um (um)','Fibre Diameter for Ideal Pitch (um)',
+                                                    'Number of Jacket Tubes', 'Jacket Od (mm)', 'Jacket Id (mm)'])
+
+        for key in list(jacket_dict.keys()):
+            useable_jacket_tubes = self.jacketTubes[self.jacketTubes['ID/OD'] == key][['NomOD','NomID']]
+            jacket_od = useable_jacket_tubes.iloc[0]['NomOD']
+            jacket_id = useable_jacket_tubes.iloc[0]['NomID']
+
+            # calculate fibre pitch and necessary fibre OD
+            rcf = jacket_od/self.goalDiameter
+            rsc = self.stackOd/jacket_id
+            fibre_pitch = self.final_capillary_diameter/(rsc*rcf)
+            necessary_fibre_od = rsc*jacket_od*self.desiredPitch/self.final_capillary_diameter
+
+            # add results to dataframe
+            fibre_param_options = fibre_param_options.append(pd.DataFrame([[fibre_pitch, necessary_fibre_od,
+                                                                            jacket_dict[key], jacket_od, jacket_id]],
+                                                                            columns=['Fibre Pitch at 150um (um)','Fibre Diameter for Ideal Pitch (um)',
+                                                                            'Number of Jacket Tubes', 'Jacket Od (mm)', 'Jacket Id (mm)']),
+                                                                            ignore_index=True)
+        display(fibre_param_options)

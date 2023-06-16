@@ -5,6 +5,7 @@ import matplotlib.patches as patches
 import matplotlib.colors as colors
 from scipy.spatial.distance import cdist
 import matplotlib.path as pth
+from scipy.spatial import cKDTree
 
 class StackGeometry:
     """
@@ -81,6 +82,24 @@ class StackGeometry:
             self.latticePoints = np.array(self.latticePoints) - np.array([self.nRings*self.corePitch +  self.corePitch / 2, self.nRings* self.corePitch * 0.8660254 ])
         else:
             self.latticePoints = np.array(self.latticePoints) - np.array([self.nRings*self.corePitch, self.nRings* self.corePitch * 0.8660254 ])
+
+    def build_honeycomb_lattice(self):
+        a_1 = np.array([3*self.corePitch/2, np.sqrt(3)*self.corePitch/2])
+        a_2 = np.array([3*self.corePitch/2, -np.sqrt(3)*self.corePitch/2])
+        m = self.nRings*2
+        n = self.nRings*2
+        coord_list = []
+        for j in range(m):
+            for i in range(n): 
+                coord_list.append(a_1*i + a_2*j)
+
+        coord_list_shifted = coord_list + np.array([-self.corePitch, 0])
+        coord_list = np.array(coord_list)
+
+
+        full_coord_list = np.concatenate((coord_list, coord_list_shifted), axis=0)
+        self.latticePoints = full_coord_list - (n*a_1 + m*a_2)/2 + np.array([2*self.corePitch,0])
+
 
     def trim_lattice_to_fibre(self):
         # Calculate maximum x and y coordinates for the hexagon bounding the lattice points
@@ -412,3 +431,204 @@ class GlassChecker:
                                                                             'Number of Jacket Tubes', 'Jacket Od (mm)', 'Jacket Id (mm)']),
                                                                             ignore_index=True)
         display(fibre_param_options)
+
+class AnalysisClass:
+    def __init__(self, lattice_coords, propagation_const, twist_rate, coupling_strength, pitch):
+        self.coreLocs = lattice_coords
+        self.betaStraight = propagation_const
+        self.twistRate = twist_rate
+        self.couplingStrength = coupling_strength
+        self.vec_twist_beta = np.vectorize(self.twisted_beta)   
+        self.pitch = pitch
+
+    def twisted_beta(self, radial_dist):
+        beta_hel = self.betaStraight*np.sqrt(1+ self.twistRate**2 * radial_dist**2)
+        # print('Difference due to twist: {:.2f}'.format(beta_hel-beta_straight))
+        return beta_hel
+    
+
+    def build_onsite(self):
+        distance_to_each_core = np.array([round(np.sqrt(i**2 + j**2),4) for i,j in self.coreLocs])*1e-6
+
+        twist_for_each_core = self.vec_twist_beta(distance_to_each_core) - self.betaStraight
+        onsite_matrix = np.diag(twist_for_each_core)
+
+        return onsite_matrix
+
+    def vec_potential(self, x,y):
+        vec_A = self.twistRate*self.betaStraight*np.array([y,-x])
+        return vec_A
+
+    def find_twisted_eigenvalues(self, with_onsite=True):
+        coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=complex)
+        honeycomb_point_tree = cKDTree(self.coreLocs, leafsize=100)
+        nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch+0.001, output_type = 'ndarray')
+        print(np.shape(nearest_neighbour_array))
+        print(np.shape(self.coreLocs[nearest_neighbour_array]))
+        print(self.coreLocs[nearest_neighbour_array[0][0]], self.coreLocs[nearest_neighbour_array[0][1]])
+        print(self.coreLocs[nearest_neighbour_array][0,0], self.coreLocs[nearest_neighbour_array][0,1])
+        for i in nearest_neighbour_array:
+            mid_point = (self.coreLocs[i[0]] + self.coreLocs[i[1]])/2
+            a_dist = (self.coreLocs[i[0]] - self.coreLocs[i[1]])*1.0e-6
+            # print(mid_point)
+            vec_term = self.vec_potential(mid_point[0]*1.0e-6, mid_point[1]*1.0e-6)
+
+            coupling_matrix[i[0],i[1]] = self.couplingStrength* np.exp(1.0j * np.dot(vec_term, a_dist))
+
+            a_dist_rev = (self.coreLocs[i[1]] - self.coreLocs[i[0]])*1.0e-6
+            coupling_matrix[i[1],i[0]] = self.couplingStrength * np.exp(1.0j * np.dot(vec_term, a_dist_rev))
+
+        if with_onsite is True:
+            onsite_matrix = self.build_onsite()
+            self.couplingMatrix = coupling_matrix + onsite_matrix
+        else: 
+            self.couplingMatrix = coupling_matrix
+        # print(np.allclose(full_C, np.transpose(np.conjugate(full_C))))
+        self.betaSuper, self.eigVecs = np.linalg.eigh(self.couplingMatrix)
+
+        return self.betaSuper, self.eigVecs
+    
+    def plot_propagation_const(self):    
+        """
+        Function to nicely plot the propagation constants for easy
+        band determination.
+
+        beta_vals is the list of prop consts. 
+
+        point label can be a list of str or a str labelling the data
+        xrange can be set to only plot a slice of prop consts. 
+        """
+
+        fig1  = plt.figure(figsize=(6,6))   
+        ax1 = fig1.add_subplot(111)
+
+        ax1.scatter(np.arange(len(self.betaSuper)), self.betaSuper-np.mean(self.betaSuper), s=10, color='#424651')
+        ax1.set_ylabel(r'$\Delta \beta$')
+        ax1.set_xlabel('Mode Index')
+        plt.show()
+
+    # For nice plotting of eigenvectors 
+    def plot_eigenmode(self, mode_no_to_plot):
+        """
+            Function for visualising the eigenvectors as fibre core excitations.
+            Plots a lattice of circles with color corresponding to intensity.    
+        """
+        fig_chain = plt.figure(figsize=(6,6))
+        ax_chain = fig_chain.add_subplot(111)
+
+        intensities = self.eigVecs[:,mode_no_to_plot]*np.conj(self.eigVecs[:,mode_no_to_plot])
+        norm_intensities = intensities/np.sum(intensities)
+        circ_list = []
+        norm = colors.Normalize(vmin=min(np.real(norm_intensities)), vmax=max(np.real(norm_intensities)))
+        cmap = plt.cm.get_cmap('Reds')
+        cmap(norm(np.real(norm_intensities)))
+
+        for j in range(len(norm_intensities)):
+            circ_list.append(patches.Circle((self.coreLocs[j][0], self.coreLocs[j][1]), radius=self.pitch*0.45,
+                                                color=cmap(norm(np.real(norm_intensities[j]))),ec='black')) 
+
+    
+        plt.axis('off')
+        # Plot all circles
+        for _circ in circ_list:
+            ax_chain.add_patch(_circ)
+        plt.title('Mode no. {:d}'.format(mode_no_to_plot), loc='left')
+        plt.axis('scaled')
+        plt.show() 
+
+    def ABC_sections(self, x_size, x_shift):
+        """
+        Draw three equal sized polygons over the lattice, labelled counterclockwise.
+        Input only the width of the total composite rectangle made from the three polygons.
+        Returns the patches shape objects. 
+        """
+        xyA = np.array([[0+x_shift,0], [x_size+x_shift, -x_size*0.5], [x_size+x_shift, x_size], [0+x_shift, x_size]])
+        xyC = np.array([[0+x_shift,0],[x_size+x_shift,-x_size*0.5],[x_size+x_shift, -x_size*0.875], [-x_size+x_shift,-0.875*x_size],[-x_size+x_shift,-x_size*0.5]])
+        xyB = np.array([[0+x_shift,0], [-x_size+x_shift, -x_size*0.5], [-x_size+x_shift, x_size], [0+x_shift, x_size]])
+        shape_A = patches.Polygon(xyA,alpha=0.3, label='A');
+        shape_B = patches.Polygon(xyB,fc='green', alpha=0.3, label='B');
+        shape_C = patches.Polygon(xyC,fc='red', alpha=0.3, label='C');
+
+        return shape_A, shape_B, shape_C
+    
+    def show_ABC_sections(self, size, shift):
+        """
+        """
+        fig_lattice = plt.figure(figsize=(6,6))
+        ax_lattice = fig_lattice.add_subplot(111)
+        
+        ax_lattice.scatter(self.coreLocs[:,0], self.coreLocs[:,1])
+        a_s, b_s, c_s = self.ABC_sections(size, shift)
+        ax_lattice.add_patch(a_s)
+        ax_lattice.add_patch(b_s)
+        ax_lattice.add_patch(c_s)
+        ax_lattice.set_aspect('equal')
+        plt.show()
+
+    def index_in_sections(self, sample_width, shift):
+        """
+        Input a list of points that correspond to a lattice geometry. Pair list in the form: [[x1,y1],[x2,y2],[x3,y3]]
+        Sample width is the width of the rectangle used to split the lattice into three different sections.
+        The returned lists are the indices of points within each of the sections A, B, C defined in ABC sections. 
+        """
+
+        A_shape, B_shape, C_shape, = self.ABC_sections(sample_width, shift)
+        
+        fig_for_index = plt.figure(figsize=(9,6))
+        ax_for_index = fig_for_index.add_subplot(111)
+
+        ax_for_index.scatter(self.coreLocs[:,0], self.coreLocs[:,1]);
+
+        ax_for_index.add_patch(A_shape);
+        ax_for_index.add_patch(B_shape);
+        ax_for_index.add_patch(C_shape);
+        
+        # I have to write pair list as (ax_for_index.transData.transform(pair_list)
+        #  to get the data in the right form for contains points to work)
+        Acont = A_shape.contains_points(ax_for_index.transData.transform(self.coreLocs)).nonzero()[0]
+        Bcont = B_shape.contains_points(ax_for_index.transData.transform(self.coreLocs)).nonzero()[0]
+        Ccont = C_shape.contains_points(ax_for_index.transData.transform(self.coreLocs)).nonzero()[0]
+        plt.close()
+        # plt.show()
+
+        return Acont, Bcont, Ccont
+    
+    # First I build up the projector matrix for the desired band
+# defining this func to check if matrix is symmetric
+# def check_symmetric(a, rtol=1e-05, atol=1e-08):
+#     return np.allclose(a, a.T, rtol=rtol, atol=atol)
+
+    def real_space_chern_calc(self, band_start, band_end, section_size, shift):
+        """
+            Function to calculate real space chern numbers using method outlined in mitchel et al. 2018
+        """
+        ## individual_matrix_list = np.zeros((len(beta_vecs), len(beta_vecs), len(band_range)), dtype=np.complex128)
+        ## for point in band_range:
+        #    # individual_matrix_list[:,:,point] = np.outer(beta_vecs[point],np.conjugate(beta_vecs[point]))
+        ## projector_matrix_orig = np.sum(individual_matrix_list, axis=2) 
+        
+        # Code above has been replaced with einsum, still building a list of outer products
+        # then summing that list over a range of eigenvalues in a given band
+        projector_matrix = np.einsum('in,jn-> ij', self.eigVecs[:,band_start:band_end], np.conjugate(self.eigVecs[:,band_start:band_end]))
+
+        # Next I collect points in A,B,C sections
+        a_indices, b_indices, c_indices = self.index_in_sections(section_size, shift)
+
+        # quick sanity check on symmetry of projector
+        # print(check_symmetric(projector_matrix))
+
+        # Finally I find the overlap of the projector with all combinations of points 
+        all_h_vals = np.zeros((len(a_indices), len(b_indices), len(c_indices)), dtype=np.complex128)
+        # for each point in the A,B,C sections the projectors are found
+        #  c->b->a permutation of projection values are subtracted from a->b->c. 
+        # This difference is connected to the system's chern number 
+        for na,a_index in enumerate(a_indices):
+            for nb,b_index in enumerate(b_indices):
+                for nc,c_index in enumerate(c_indices):
+                    all_h_vals[na, nb, nc] = 12*np.pi*1.0j*(projector_matrix[a_index,b_index]*projector_matrix[b_index, c_index]*projector_matrix[c_index,a_index] - 
+                                                            projector_matrix[a_index,c_index]*projector_matrix[c_index, b_index]*projector_matrix[b_index,a_index])
+                                                            #h_i_j_k(a_index, b_index, c_index, projector_matrix)                       
+        # sum over total permutation differences to get chern no. 
+        chern_no = np.sum(all_h_vals)
+        # print(chern_no)
+        return chern_no

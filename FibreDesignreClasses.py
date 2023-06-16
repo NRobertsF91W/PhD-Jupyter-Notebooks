@@ -460,13 +460,10 @@ class AnalysisClass:
         return vec_A
 
     def find_twisted_eigenvalues(self, with_onsite=True):
-        coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=complex)
+        coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=np.complex128)
         honeycomb_point_tree = cKDTree(self.coreLocs, leafsize=100)
         nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch+0.001, output_type = 'ndarray')
-        print(np.shape(nearest_neighbour_array))
-        print(np.shape(self.coreLocs[nearest_neighbour_array]))
-        print(self.coreLocs[nearest_neighbour_array[0][0]], self.coreLocs[nearest_neighbour_array[0][1]])
-        print(self.coreLocs[nearest_neighbour_array][0,0], self.coreLocs[nearest_neighbour_array][0,1])
+
         for i in nearest_neighbour_array:
             mid_point = (self.coreLocs[i[0]] + self.coreLocs[i[1]])/2
             a_dist = (self.coreLocs[i[0]] - self.coreLocs[i[1]])*1.0e-6
@@ -474,7 +471,6 @@ class AnalysisClass:
             vec_term = self.vec_potential(mid_point[0]*1.0e-6, mid_point[1]*1.0e-6)
 
             coupling_matrix[i[0],i[1]] = self.couplingStrength* np.exp(1.0j * np.dot(vec_term, a_dist))
-
             a_dist_rev = (self.coreLocs[i[1]] - self.coreLocs[i[0]])*1.0e-6
             coupling_matrix[i[1],i[0]] = self.couplingStrength * np.exp(1.0j * np.dot(vec_term, a_dist_rev))
 
@@ -488,6 +484,41 @@ class AnalysisClass:
 
         return self.betaSuper, self.eigVecs
     
+    def find_twisted_eigenvalues_vector(self, with_onsite=True):
+        coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=complex)
+        honeycomb_point_tree = cKDTree(self.coreLocs, leafsize=100)
+        nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch+0.001, output_type = 'ndarray')
+
+        mid_list = (self.coreLocs[nearest_neighbour_array][:,0] + self.coreLocs[nearest_neighbour_array][:,1])/2
+
+        a_dist_list = (self.coreLocs[nearest_neighbour_array][:,0] - self.coreLocs[nearest_neighbour_array][:,1])*1.0e-6
+        a_dist_reverse_list = (self.coreLocs[nearest_neighbour_array][:,1] - self.coreLocs[nearest_neighbour_array][:,0])*1.0e-6
+        vec_term_list = self.twistRate*self.betaStraight*(1.0e-6*np.flip(mid_list, axis=1)*np.array([1,-1]))
+
+        coupling_matrix[nearest_neighbour_array[:,0], nearest_neighbour_array[:,1]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_list))
+        coupling_matrix[nearest_neighbour_array[:,1], nearest_neighbour_array[:,0]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_reverse_list))
+
+        # for i in nearest_neighbour_array:
+        #     mid_point = (self.coreLocs[i[0]] + self.coreLocs[i[1]])/2
+        #     a_dist = (self.coreLocs[i[0]] - self.coreLocs[i[1]])*1.0e-6
+        #     # print(mid_point)
+        #     vec_term = self.vec_potential(mid_point[0]*1.0e-6, mid_point[1]*1.0e-6)
+
+        #     coupling_matrix[i[0],i[1]] = self.couplingStrength* np.exp(1.0j * np.dot(vec_term, a_dist))
+
+        #     a_dist_rev = (self.coreLocs[i[1]] - self.coreLocs[i[0]])*1.0e-6
+        #     coupling_matrix[i[1],i[0]] = self.couplingStrength * np.exp(1.0j * np.dot(vec_term, a_dist_rev))
+
+        if with_onsite is True:
+            onsite_matrix = self.build_onsite()
+            self.couplingMatrix = coupling_matrix + onsite_matrix
+        else: 
+            self.couplingMatrix = coupling_matrix
+        # print(np.allclose(full_C, np.transpose(np.conjugate(full_C))))
+        self.betaSuper, self.eigVecs = np.linalg.eigh(self.couplingMatrix)
+
+        return self.betaSuper, self.eigVecs
+
     def plot_propagation_const(self):    
         """
         Function to nicely plot the propagation constants for easy

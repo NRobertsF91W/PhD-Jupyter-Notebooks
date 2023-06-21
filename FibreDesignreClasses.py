@@ -434,6 +434,16 @@ class GlassChecker:
 
 class AnalysisClass:
     def __init__(self, lattice_coords, propagation_const, twist_rate, coupling_strength, pitch):
+        """
+        Initializes the AnalysisClass object.
+
+        Args:
+            lattice_coords (ndarray): Array of core lattice coordinates.
+            propagation_const (float): Propagation constant.
+            twist_rate (float): Twist rate.
+            coupling_strength (float): Coupling strength.
+            pitch (float): Pitch value.
+        """
         self.coreLocs = lattice_coords
         self.betaStraight = propagation_const
         self.twistRate = twist_rate
@@ -448,6 +458,11 @@ class AnalysisClass:
     
 
     def build_onsite(self):
+        """
+        Builds the onsite matrix based on twist values.
+        Returns:
+            ndarray: Onsite matrix.
+        """
         distance_to_each_core = np.array([round(np.sqrt(i**2 + j**2),4) for i,j in self.coreLocs])*1e-6
 
         twist_for_each_core = self.vec_twist_beta(distance_to_each_core) - self.betaStraight
@@ -456,6 +471,16 @@ class AnalysisClass:
         return onsite_matrix
 
     def vec_potential(self, x,y):
+        """
+        Calculates the vector potential based on x and y coordinates.
+
+        Args:
+            x (float): x-coordinate.
+            y (float): y-coordinate.
+
+        Returns:
+            ndarray: Vector potential.
+        """
         vec_A = self.twistRate*self.betaStraight*np.array([y,-x])
         return vec_A
 
@@ -483,41 +508,97 @@ class AnalysisClass:
         self.betaSuper, self.eigVecs = np.linalg.eigh(self.couplingMatrix)
 
         return self.betaSuper, self.eigVecs
-    
+
     def find_twisted_eigenvalues_vector(self, with_onsite=True):
-        coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=complex)
+        """
+        Calculates the eigenvalues and eigenvectors of a twisted Hamiltonian matrix for a given system.
+
+        Args:
+            self: The instance of the class.
+            with_onsite (bool): Flag indicating whether to include the onsite matrix in the coupling matrix.
+
+        Returns:
+            Tuple: A tuple containing the eigenvalues (betaSuper) and eigenvectors (eigVecs) of the coupling matrix.
+        """
+
+        # Initialize coupling matrix
+        coupling_matrix = np.zeros((len(self.coreLocs[:, 0]), len(self.coreLocs[:, 0])), dtype=complex)
+
+        # Build a KDTree for efficient nearest neighbor searching
         honeycomb_point_tree = cKDTree(self.coreLocs, leafsize=100)
-        nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch+0.001, output_type = 'ndarray')
 
-        mid_list = (self.coreLocs[nearest_neighbour_array][:,0] + self.coreLocs[nearest_neighbour_array][:,1])/2
+        # Find pairs of nearest neighbors within a specified distance
+        nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch + 0.001, output_type='ndarray')
 
-        a_dist_list = (self.coreLocs[nearest_neighbour_array][:,0] - self.coreLocs[nearest_neighbour_array][:,1])*1.0e-6
-        a_dist_reverse_list = (self.coreLocs[nearest_neighbour_array][:,1] - self.coreLocs[nearest_neighbour_array][:,0])*1.0e-6
-        vec_term_list = self.twistRate*self.betaStraight*(1.0e-6*np.flip(mid_list, axis=1)*np.array([1,-1]))
+        # Calculate midpoints between nearest neighbors
+        mid_list = (self.coreLocs[nearest_neighbour_array][:, 0] + self.coreLocs[nearest_neighbour_array][:, 1]) / 2
 
-        coupling_matrix[nearest_neighbour_array[:,0], nearest_neighbour_array[:,1]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_list))
-        coupling_matrix[nearest_neighbour_array[:,1], nearest_neighbour_array[:,0]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_reverse_list))
+        # Calculate distance vectors between nearest neighbors
+        a_dist_list = (self.coreLocs[nearest_neighbour_array][:, 0] - self.coreLocs[nearest_neighbour_array][:, 1]) * 1.0e-6
 
-        # for i in nearest_neighbour_array:
-        #     mid_point = (self.coreLocs[i[0]] + self.coreLocs[i[1]])/2
-        #     a_dist = (self.coreLocs[i[0]] - self.coreLocs[i[1]])*1.0e-6
-        #     # print(mid_point)
-        #     vec_term = self.vec_potential(mid_point[0]*1.0e-6, mid_point[1]*1.0e-6)
+        # Calculate distances between nearest neighbors in the reverse direction
+        a_dist_reverse_list = (self.coreLocs[nearest_neighbour_array][:, 1] - self.coreLocs[nearest_neighbour_array][:, 0]) * 1.0e-6
 
-        #     coupling_matrix[i[0],i[1]] = self.couplingStrength* np.exp(1.0j * np.dot(vec_term, a_dist))
+        # Calculate vector potential terms for all pairs of neighbours 
+        # this line implements the vec potential function for all points in the arrays using numpy broadcasting
+        vec_term_list = self.twistRate * self.betaStraight * (1.0e-6 * np.flip(mid_list, axis=1) * np.array([1, -1]))
 
-        #     a_dist_rev = (self.coreLocs[i[1]] - self.coreLocs[i[0]])*1.0e-6
-        #     coupling_matrix[i[1],i[0]] = self.couplingStrength * np.exp(1.0j * np.dot(vec_term, a_dist_rev))
+        # Update coupling matrix for forward connections
+        # the numpy einsum returns a list of dot products, where each one is from a single peierls term
+        coupling_matrix[nearest_neighbour_array[:, 0], nearest_neighbour_array[:, 1]] = self.couplingStrength * np.exp(
+            1.0j * np.einsum('ij,ij->i', vec_term_list, a_dist_list))
+
+        # Update coupling matrix for reverse connections
+        # the numpy einsum returns a list of dot products, where each one is from a single peierls term
+        coupling_matrix[nearest_neighbour_array[:, 1], nearest_neighbour_array[:, 0]] = self.couplingStrength * np.exp(
+            1.0j * np.einsum('ij,ij->i', vec_term_list, a_dist_reverse_list))
 
         if with_onsite is True:
+            # Include onsite matrix in the coupling matrix
             onsite_matrix = self.build_onsite()
             self.couplingMatrix = coupling_matrix + onsite_matrix
-        else: 
+        else:
             self.couplingMatrix = coupling_matrix
-        # print(np.allclose(full_C, np.transpose(np.conjugate(full_C))))
+
+        # Calculate eigenvalues and eigenvectors of the coupling matrix
         self.betaSuper, self.eigVecs = np.linalg.eigh(self.couplingMatrix)
 
-        return self.betaSuper, self.eigVecs
+        return 
+
+    
+    # def find_twisted_eigenvalues_vector(self, with_onsite=True):
+    #     coupling_matrix = np.zeros((len(self.coreLocs[:,0]),len(self.coreLocs[:,0])), dtype=complex)
+    #     honeycomb_point_tree = cKDTree(self.coreLocs, leafsize=100)
+    #     nearest_neighbour_array = honeycomb_point_tree.query_pairs(self.pitch+0.001, output_type = 'ndarray')
+
+    #     mid_list = (self.coreLocs[nearest_neighbour_array][:,0] + self.coreLocs[nearest_neighbour_array][:,1])/2
+
+    #     a_dist_list = (self.coreLocs[nearest_neighbour_array][:,0] - self.coreLocs[nearest_neighbour_array][:,1])*1.0e-6
+    #     a_dist_reverse_list = (self.coreLocs[nearest_neighbour_array][:,1] - self.coreLocs[nearest_neighbour_array][:,0])*1.0e-6
+    #     vec_term_list = self.twistRate*self.betaStraight*(1.0e-6*np.flip(mid_list, axis=1)*np.array([1,-1]))
+
+    #     coupling_matrix[nearest_neighbour_array[:,0], nearest_neighbour_array[:,1]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_list))
+    #     coupling_matrix[nearest_neighbour_array[:,1], nearest_neighbour_array[:,0]] = self.couplingStrength*np.exp(1.0j* np.einsum('ij,ij->i', vec_term_list, a_dist_reverse_list))
+
+    #     # for i in nearest_neighbour_array:
+    #     #     mid_point = (self.coreLocs[i[0]] + self.coreLocs[i[1]])/2
+    #     #     a_dist = (self.coreLocs[i[0]] - self.coreLocs[i[1]])*1.0e-6
+    #     #     # print(mid_point)
+    #     #     vec_term = self.vec_potential(mid_point[0]*1.0e-6, mid_point[1]*1.0e-6)
+
+    #     #     coupling_matrix[i[0],i[1]] = self.couplingStrength* np.exp(1.0j * np.dot(vec_term, a_dist))
+
+    #     #     a_dist_rev = (self.coreLocs[i[1]] - self.coreLocs[i[0]])*1.0e-6
+    #     #     coupling_matrix[i[1],i[0]] = self.couplingStrength * np.exp(1.0j * np.dot(vec_term, a_dist_rev))
+
+    #     if with_onsite is True:
+    #         onsite_matrix = self.build_onsite()
+    #         self.couplingMatrix = coupling_matrix + onsite_matrix
+    #     else: 
+    #         self.couplingMatrix = coupling_matrix
+
+    #     self.betaSuper, self.eigVecs = np.linalg.eigh(self.couplingMatrix)
+    #     return
 
     def plot_propagation_const(self):    
         """
@@ -625,8 +706,8 @@ class AnalysisClass:
         return Acont, Bcont, Ccont
     
     # First I build up the projector matrix for the desired band
-# defining this func to check if matrix is symmetric
-# def check_symmetric(a, rtol=1e-05, atol=1e-08):
+    # defining this func to check if matrix is symmetric
+    # def check_symmetric(a, rtol=1e-05, atol=1e-08):
 #     return np.allclose(a, a.T, rtol=rtol, atol=atol)
 
     def real_space_chern_calc(self, band_start, band_end, section_size, shift):
@@ -663,3 +744,13 @@ class AnalysisClass:
         chern_no = np.sum(all_h_vals)
         # print(chern_no)
         return chern_no
+
+    def twisted_chern_sweep(self, twist, starting_band, selection_size, shift):
+        self.twistRate = twist
+        self.find_twisted_eigenvalues_vector()
+        return self.real_space_chern_calc(starting_band, len(self.betaSuper), selection_size, shift)
+
+    def twisted_chern_c1_sweep(self, c1, starting_band, selection_size, shift):
+        self.couplingStrength = c1
+        self.find_twisted_eigenvalues_vector()
+        return self.real_space_chern_calc(starting_band, len(self.betaSuper), selection_size, shift)

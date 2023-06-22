@@ -754,3 +754,9 @@ class AnalysisClass:
         self.couplingStrength = c1
         self.find_twisted_eigenvalues_vector()
         return self.real_space_chern_calc(starting_band, len(self.betaSuper), selection_size, shift)
+
+    def twisted_chern_both_sweep(self, twist, c1, starting_band, selection_size, shift):
+        self.couplingStrength = c1
+        self.twistRate = twist
+        self.find_twisted_eigenvalues_vector()
+        return self.real_space_chern_calc(starting_band, len(self.betaSuper), selection_size, shift)
